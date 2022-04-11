@@ -177,7 +177,6 @@ describe('DestinationChainContractCallFails', () => {
       const dstSymbolA = 'dstTestA';
       const dstNameB = 'Test Token B';
       const dstSymbolB = 'dstTestB';
-      const initialSupply = 1e6;
       const capacity = 0;
 
 
@@ -199,7 +198,8 @@ describe('DestinationChainContractCallFails', () => {
 
       const eoa = ownerWallet.address;
       const spender = contract.address;
-      const srcAmount = 600000; // sseefried: Try a value less than 500,000 to see the destination contract call NOT revert
+      const srcAmount = 600000; // sseefried: Try a value less than 'tokenSwapperSupply / 2' to see the destination contract call NOT revert
+      const tokenSwapperSupply = 1e6;
       const chain = 'polygon';
       const destination = nonOwnerWallet.address.toString().replace('0x', '');
       const payload = defaultAbiCoder.encode(
@@ -258,8 +258,8 @@ describe('DestinationChainContractCallFails', () => {
         [contract.address, swapper.address],
       );
 
-      await tokenA.mint(contract.address, initialSupply);
-      await tokenB.mint(swapper.address, initialSupply);
+      await tokenA.mint(contract.address, 1e6);
+      await tokenB.mint(swapper.address, tokenSwapperSupply);
 
       const deployTokenData = arrayify(
         defaultAbiCoder.encode(

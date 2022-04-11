@@ -21,17 +21,20 @@ contract TokenSwapper {
     ) external returns (uint256 convertedAmount) {
         IERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
 
+        uint256 balanceTokenB; 
+
         if (tokenAddress == tokenA) {
             require(toTokenAddress == tokenB, 'WRONG TOKEN PAIR');
             convertedAmount = amount * 2;
+            balanceTokenB = IERC20(toTokenAddress).balanceOf(address(this));
         } else {
             require(tokenAddress == tokenB && toTokenAddress == tokenA, 'WRONG TOKEN PAIR');
             convertedAmount = amount / 2;
+            balanceTokenB = IERC20(tokenAddress).balanceOf(address(this));
+
         }
 
-        uint256 balance = IERC20(tokenAddress).balanceOf(address(this));
-
-        require(balance >= convertedAmount, "Not enough of tokenB");
+        require(balanceTokenB >= convertedAmount, "Not enough of tokenB");
 
         IERC20(toTokenAddress).transfer(recipient, convertedAmount);
     }
