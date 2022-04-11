@@ -4,6 +4,7 @@ const chai = require('chai');
 const {
   Contract,
   ContractFactory,
+  BigNumber,
   utils: {
     defaultAbiCoder,
     id,
@@ -123,15 +124,19 @@ describe('DestinationChainContractCallFails', () => {
     );
   });
 
-
-
   describe('external contract execution', () => {
 
-    it('should burn internal token and emit an event', async () => {
-      const tokenName = 'Test Token';
-      const tokenSymbol = 'TEST';
-      const decimals = 18;
+    it('should burn internal token, emit an event, pick up event, attempt destination chain contract call', async () => {
+
+      /*
+       *  Source Chain
+       */
+
+      const sourceTokenName = 'Test Token A';
+      const sourceTokenSymbol = 'srcTestA';
+      const decimals = 16;
       const cap = 1e9;
+      const initialOwnerWalletTokens = 1e6;
 
       const data = arrayify(
         defaultAbiCoder.encode(
@@ -144,11 +149,11 @@ describe('DestinationChainContractCallFails', () => {
             [
               defaultAbiCoder.encode(
                 ['string', 'string', 'uint8', 'uint256', 'address'],
-                [tokenName, tokenSymbol, decimals, cap, ADDRESS_ZERO],
+                [sourceTokenName, sourceTokenSymbol, decimals, cap, ADDRESS_ZERO],
               ),
               defaultAbiCoder.encode(
                 ['string', 'address', 'uint256'],
-                [tokenSymbol, ownerWallet.address, 1e6],
+                [sourceTokenSymbol, ownerWallet.address, initialOwnerWalletTokens],
               ),
             ],
           ],
@@ -156,40 +161,42 @@ describe('DestinationChainContractCallFails', () => {
       );
       await contract.execute(await getSignedExecuteInput(data, ownerWallet));
 
-      const tokenAddress = await contract.tokenAddresses(tokenSymbol);
-      const token = new Contract(
-        tokenAddress,
+      const sourceTokenAddress = await contract.tokenAddresses(sourceTokenSymbol);
+      const sourceToken = new Contract(
+        sourceTokenAddress,
         BurnableMintableCappedERC20.abi,
         ownerWallet,
       );
 
       const eoa = ownerWallet.address;
       const spender = contract.address;
-      const amount = 1000;
+      const srcAmount = 600000;
       const chain = 'polygon';
       const destination = nonOwnerWallet.address.toString().replace('0x', '');
       const payload = defaultAbiCoder.encode(
         ['address', 'address'],
         [ownerWallet.address, nonOwnerWallet.address],
       );
+      const payloadHash = keccak256(payload);
 
-      await expect(await token.approve(spender, amount))
-        .to.emit(token, 'Approval')
-        .withArgs(eoa, spender, amount);
+      await expect(await sourceToken.approve(spender, srcAmount))
+        .to.emit(sourceToken, 'Approval')
+        .withArgs(eoa, spender, srcAmount);
 
-      console.log((await token.balanceOf(eoa)).toNumber()); // sseefried: Balance before
+      const balanceBefore = await sourceToken.balanceOf(eoa);
+      expect(balanceBefore).to.be.equal(initialOwnerWalletTokens);
 
       await expect(
         await contract.callContractWithToken(
           chain,
           destination,
           payload,
-          tokenSymbol,
-          amount,
+          sourceTokenSymbol,
+          srcAmount,
         ),
       )
-        .to.emit(token, 'Transfer')
-        .withArgs(eoa, ADDRESS_ZERO, amount) 
+        .to.emit(sourceToken, 'Transfer')
+        .withArgs(eoa, ADDRESS_ZERO, srcAmount) 
         // sseefried: This is the Transfer emitted by https://github.com/OpenZeppelin/openzeppelin-contracts/blob/28dd490726f045f7137fa1903b7a6b8a52d6ffcb/contracts/token/ERC20/ERC20.sol#L292
         // in the _burn function
         .to.emit(contract, 'ContractCallWithToken')
@@ -199,22 +206,24 @@ describe('DestinationChainContractCallFails', () => {
           destination,
           keccak256(payload),
           payload,
-          tokenSymbol,
-          amount,
+          sourceTokenSymbol,
+          srcAmount,
         );
 
-      console.log((await token.balanceOf(eoa)).toNumber()); // sseefried: Balance after
+      const balanceAfter = await sourceToken.balanceOf(eoa);
+      expect(balanceAfter).to.be.equal(initialOwnerWalletTokens - srcAmount);
 
+      ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    });
+      /*
+       *  Destination Chain
+       */
 
-
-    it('should approve to call external TokenSwapper contract', async () => {
-      const nameA = 'testA';
-      const symbolA = 'testA';
-      const nameB = 'testB';
-      const symbolB = 'testB';
-      const decimals = 16;
+      const nameA = 'Test Token A';
+      const symbolA = 'dstTestA';
+      const nameB = 'Test Token B';
+      const symbolB = 'dstTestB';
+      const initialSupply = 1e6;
       const capacity = 0;
 
       const tokenA = await deployContract(ownerWallet, MintableCappedERC20, [
@@ -242,8 +251,8 @@ describe('DestinationChainContractCallFails', () => {
         [contract.address, swapper.address],
       );
 
-      await tokenA.mint(contract.address, 1e6);
-      await tokenB.mint(swapper.address, 1e6);
+      await tokenA.mint(contract.address, initialSupply);
+      await tokenB.mint(swapper.address, initialSupply);
 
       const deployTokenData = arrayify(
         defaultAbiCoder.encode(
@@ -269,12 +278,8 @@ describe('DestinationChainContractCallFails', () => {
           .withArgs(symbolA, tokenA.address),
       );
 
-      const payload = defaultAbiCoder.encode(
-        ['address', 'address'],
-        [tokenB.address, nonOwnerWallet.address],
-      );
-      const payloadHash = keccak256(payload);
-      const swapAmount = 600000; // sseefried: Make the swap amount too high
+
+      const dstAmount = srcAmount;
       const commandId = getRandomID();
       const sourceChain = 'polygon';
       const sourceAddress = 'address0x123';
@@ -307,7 +312,7 @@ describe('DestinationChainContractCallFails', () => {
                   swapExecutable.address,
                   payloadHash,
                   symbolA,
-                  swapAmount,
+                  dstAmount,
                   sourceTxHash,
                   sourceEventIndex,
                 ],
@@ -317,10 +322,12 @@ describe('DestinationChainContractCallFails', () => {
         ),
       );
 
+      // AxelarGatewayMultisig.approveContractCallWithMint()
       const approveExecute = await contract.execute(
         await getSignedExecuteInput(approveWithMintData, ownerWallet),
       );
 
+      // listen for ContractCallApprovedWithMint event
       await expect(approveExecute)
         .to.emit(contract, 'ContractCallApprovedWithMint')
         .withArgs(
@@ -330,7 +337,7 @@ describe('DestinationChainContractCallFails', () => {
           swapExecutable.address,
           payloadHash,
           symbolA,
-          swapAmount,
+          dstAmount,
           sourceTxHash,
           sourceEventIndex,
         )
@@ -343,28 +350,33 @@ describe('DestinationChainContractCallFails', () => {
           swapExecutable.address,
           payloadHash,
           symbolA,
-          swapAmount,
+          dstAmount,
         )
         .then((result) => expect(result).to.be.true);
 
+      // External relayer service listens for the ContractApprovalWithMin event and calls executeWithToken
       const swap = swapExecutable.executeWithToken(
         commandId,
         sourceChain,
         sourceAddress,
         payload,
         symbolA,
-        swapAmount,
+        dstAmount,
         { gasLimit: 200000 }
       );
 
-      // This reverts because even though 600,000 units of tokenA are minted,
-      //  since there is not 600,000 * 2 = 1,200,000 units of tokenB.
+      // Unfortunately, the destination contract call reverts because 
+      // -- even though 600,000 units of tokenA are minted -- 
+      // there are not 1,200,000 (600,000 * 2) units of tokenB. There are only 1,000,000
       await expect(swap).to.be.reverted;
 
       //
-      // But the tokens that were burned on the source chain have still be burned.
+      // But the tokens that were burned on the source chain have still be burned
+      // and the user does not get them back.
       //
 
+      const balanceAtEnd = await sourceToken.balanceOf(ownerWallet.address);
+      expect(balanceAtEnd).to.be.equal(initialOwnerWalletTokens - srcAmount);
 
     });
   });
