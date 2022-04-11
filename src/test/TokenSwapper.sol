@@ -29,6 +29,10 @@ contract TokenSwapper {
             convertedAmount = amount / 2;
         }
 
+        uint256 balance = IERC20(tokenAddress).balanceOf(address(this));
+
+        require(balance >= convertedAmount, "Not enough of tokenB");
+
         IERC20(toTokenAddress).transfer(recipient, convertedAmount);
     }
 }

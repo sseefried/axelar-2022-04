@@ -161,6 +161,7 @@ describe('DestinationChainContractCallFails', () => {
       );
       await contract.execute(await getSignedExecuteInput(data, ownerWallet));
 
+      // deploy token A on the source chain
       const sourceTokenAddress = await contract.tokenAddresses(sourceTokenSymbol);
       const sourceToken = new Contract(
         sourceTokenAddress,
@@ -168,16 +169,43 @@ describe('DestinationChainContractCallFails', () => {
         ownerWallet,
       );
 
+      /*
+       *  Now deploy tokenA and tokenB on the Destination Chain
+       */
+
+      const dstNameA = 'Test Token A';
+      const dstSymbolA = 'dstTestA';
+      const dstNameB = 'Test Token B';
+      const dstSymbolB = 'dstTestB';
+      const initialSupply = 1e6;
+      const capacity = 0;
+
+
+      const tokenA = await deployContract(ownerWallet, MintableCappedERC20, [
+        dstNameA,
+        dstSymbolA,
+        decimals,
+        capacity,
+      ]);
+
+      const tokenB = await deployContract(ownerWallet, MintableCappedERC20, [
+        dstNameB,
+        dstSymbolB,
+        decimals,
+        capacity,
+      ]);
+
+
+
       const eoa = ownerWallet.address;
       const spender = contract.address;
-      const srcAmount = 600000;
+      const srcAmount = 600000; // sseefried: Try a value less than 500,000 to see the destination contract call NOT revert
       const chain = 'polygon';
       const destination = nonOwnerWallet.address.toString().replace('0x', '');
       const payload = defaultAbiCoder.encode(
         ['address', 'address'],
-        [ownerWallet.address, nonOwnerWallet.address],
+        [tokenB.address, nonOwnerWallet.address],
       );
-      const payloadHash = keccak256(payload);
 
       await expect(await sourceToken.approve(spender, srcAmount))
         .to.emit(sourceToken, 'Approval')
@@ -216,29 +244,8 @@ describe('DestinationChainContractCallFails', () => {
       ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
       /*
-       *  Destination Chain
+       * Destination Chain
        */
-
-      const nameA = 'Test Token A';
-      const symbolA = 'dstTestA';
-      const nameB = 'Test Token B';
-      const symbolB = 'dstTestB';
-      const initialSupply = 1e6;
-      const capacity = 0;
-
-      const tokenA = await deployContract(ownerWallet, MintableCappedERC20, [
-        nameA,
-        symbolA,
-        decimals,
-        capacity,
-      ]);
-
-      const tokenB = await deployContract(ownerWallet, MintableCappedERC20, [
-        nameB,
-        symbolB,
-        decimals,
-        capacity,
-      ]);
 
       const swapper = await deployContract(ownerWallet, TokenSwapper, [
         tokenA.address,
@@ -265,7 +272,7 @@ describe('DestinationChainContractCallFails', () => {
             [
               defaultAbiCoder.encode(
                 ['string', 'string', 'uint8', 'uint256', 'address'],
-                [nameA, symbolA, decimals, capacity, tokenA.address],
+                [dstNameA, dstSymbolA, decimals, capacity, tokenA.address],
               ),
             ],
           ],
@@ -275,7 +282,7 @@ describe('DestinationChainContractCallFails', () => {
       await getSignedExecuteInput(deployTokenData, ownerWallet).then((input) =>
         expect(contract.execute(input))
           .to.emit(contract, 'TokenDeployed')
-          .withArgs(symbolA, tokenA.address),
+          .withArgs(dstSymbolA, tokenA.address),
       );
 
 
@@ -285,6 +292,8 @@ describe('DestinationChainContractCallFails', () => {
       const sourceAddress = 'address0x123';
       const sourceTxHash = keccak256('0x123abc123abc');
       const sourceEventIndex = 17;
+
+      const payloadHash = keccak256(payload);
 
       const approveWithMintData = arrayify(
         defaultAbiCoder.encode(
@@ -311,7 +320,7 @@ describe('DestinationChainContractCallFails', () => {
                   sourceAddress,
                   swapExecutable.address,
                   payloadHash,
-                  symbolA,
+                  dstSymbolA,
                   dstAmount,
                   sourceTxHash,
                   sourceEventIndex,
@@ -336,7 +345,7 @@ describe('DestinationChainContractCallFails', () => {
           sourceAddress,
           swapExecutable.address,
           payloadHash,
-          symbolA,
+          dstSymbolA,
           dstAmount,
           sourceTxHash,
           sourceEventIndex,
@@ -349,7 +358,7 @@ describe('DestinationChainContractCallFails', () => {
           sourceAddress,
           swapExecutable.address,
           payloadHash,
-          symbolA,
+          dstSymbolA,
           dstAmount,
         )
         .then((result) => expect(result).to.be.true);
@@ -360,18 +369,19 @@ describe('DestinationChainContractCallFails', () => {
         sourceChain,
         sourceAddress,
         payload,
-        symbolA,
+        dstSymbolA,
         dstAmount,
         { gasLimit: 200000 }
       );
 
-      // Unfortunately, the destination contract call reverts because 
+      // sseefried: Unfortunately, the destination contract call reverts because 
       // -- even though 600,000 units of tokenA are minted -- 
       // there are not 1,200,000 (600,000 * 2) units of tokenB. There are only 1,000,000
-      await expect(swap).to.be.reverted;
+      await expect(swap).to.be.revertedWith("Not enough of tokenB");
+      // ^ sseefried: I modified TokenSwapper to check if there was enough of tokenB or else revert with message "Not enough of tokenB"
 
       //
-      // But the tokens that were burned on the source chain have still be burned
+      // seefried: But the tokens that were burned on the source chain have still be burned
       // and the user does not get them back.
       //
 
